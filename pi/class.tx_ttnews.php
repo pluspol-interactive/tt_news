@@ -151,8 +151,18 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 
 	private $listData;
 
+	public function __construct(DatabaseConnection $databaseConnection = null, TypoScriptFrontendController $frontendController = null)
+    {
+        //if search => disable cache hash check to avoid pageNotFoundOnCHashError, see \TYPO3\CMS\Frontend\Controller\TypoScriptFrontendController::reqCHash
+        if(\TYPO3\CMS\Core\Utility\GeneralUtility::_GPmerged($this->prefixId)['swords'])
+        {
+            $this->pi_checkCHash = false;
+        }
 
-	/**
+        parent::__construct($databaseConnection, $frontendController);
+    }
+
+    /**
 	 * Main news function: calls the init_news() function and decides by the given CODEs which of the
 	 * functions to display news should by called.
 	 *
@@ -177,7 +187,6 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 
 		$this->conf = $conf; //store configuration
 
-
 		if ($this->conf['upstreamRendererFunc']) {
 			$this->useUpstreamRenderer = true;
 		}
@@ -192,10 +201,8 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 
 		$this->preInit();
 
-		if ($this->conf['enableConfigValidation']) {
-			if (count($this->errors)) {
-				return $this->hObj->displayErrors();
-			}
+		if ($this->conf['enableConfigValidation'] && count($this->errors)) {
+            return $this->hObj->displayErrors();
 		}
 
 		$this->init();
@@ -252,10 +259,8 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 		}
 
 		// check errors array again
-		if ($this->conf['enableConfigValidation']) {
-			if (count($this->errors)) {
-				return $this->hObj->displayErrors();
-			}
+		if ($this->conf['enableConfigValidation'] && count($this->errors)) {
+            return $this->hObj->displayErrors();
 		}
 
 		if ($this->debugTimes) {
@@ -271,8 +276,8 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 	 *
 	 */
 	function preInit() {
-
-		$this->pi_initPIflexForm(); // Init FlexForm configuration for plugin
+        // Init FlexForm configuration for plugin
+		$this->pi_initPIflexForm();
 
 		$flexformTyposcript = $this->pi_getFFvalue($this->cObj->data['pi_flexform'], 'myTS','s_misc');
 		if ($flexformTyposcript) {
@@ -550,10 +555,10 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 				// Add to content
 				$searchSub = $this->getNewsSubpart($this->templateCode, $this->spMarker('###TEMPLATE_SEARCH###'));
 
-				$renderMarkers = $this->getMarkers($searchSub);
-				$this->renderMarkers = array_unique($renderMarkers);
+                $this->renderMarkers = $this->getMarkers($searchSub);
 
 				$content .= $this->cObj->substituteMarkerArray($searchSub, $searchMarkers);
+
 				unset($searchSub);
 				unset($searchMarkers);
 
@@ -598,9 +603,12 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 						$templateName = 'TEMPLATE_ATOM1';
 						$this->templateCode = $this->cObj->fileResource($this->conf['displayXML.']['atom1_tmplFile']);
 						break;
-
+                    default:
+                        break;
 				}
 				break;
+            default:
+                break;
 		}
 
 		if ($this->debugTimes) {
@@ -623,8 +631,8 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 			$this->hObj->getParsetime(__METHOD__);
 		}
 
-		$noPeriod = 0; // used to call getSelectConf without a period length (pL) at the first archive page
-
+        // used to call getSelectConf without a period length (pL) at the first archive page
+		$noPeriod = 0;
 
 		if (! $this->conf['emptyArchListAtStart']) {
 			// if this is true, we're listing from the archive for the first time (no pS set), to prevent an empty list page we set the pS value to the archive start
@@ -639,215 +647,191 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 				}
 			}
 		}
+
 		if ($this->piVars['pS'] && ! $this->piVars['pL']) {
 			$noPeriod = 1; // override the period length checking in getSelectConf
 		}
 
-		if (1) {
+        if ($this->conf['displayCurrentRecord'] && $this->tt_news_uid) {
+            $this->pid_list = $this->cObj->data['pid'];
+            $where = 'AND tt_news.uid=' . $this->tt_news_uid;
+        }
 
+        if ($excludeUids) {
+            $where = ' AND tt_news.uid NOT IN (' . $excludeUids . ')';
+        }
 
-			if ($this->conf['displayCurrentRecord'] && $this->tt_news_uid) {
-				$this->pid_list = $this->cObj->data['pid'];
-				$where = 'AND tt_news.uid=' . $this->tt_news_uid;
-			}
-			if ($excludeUids) {
-				$where = ' AND tt_news.uid NOT IN (' . $excludeUids . ')';
-			}
+        // build parameter Array for List query
+        $selectConf = $this->getSelectConf($where, $noPeriod);
 
+        // performing query to count all news (we need to know it for browsing):
+        if ($selectConf['leftjoin'] || ($this->theCode == 'RELATED' && $this->relNewsUid)) {
+            $selectConf['selectFields'] = 'COUNT(DISTINCT tt_news.uid)';
+        } else {
+            $selectConf['selectFields'] = 'COUNT(tt_news.uid)';
+        }
 
-			// build parameter Array for List query
-			$selectConf = $this->getSelectConf($where, $noPeriod);
+        $newsCount = 0;
+        $countSelConf = $selectConf;
+        unset($countSelConf['orderBy']);
 
-			// performing query to count all news (we need to know it for browsing):
-			if ($selectConf['leftjoin'] || ($this->theCode == 'RELATED' && $this->relNewsUid)) {
-				$selectConf['selectFields'] = 'COUNT(DISTINCT tt_news.uid)';
-			} else {
-				$selectConf['selectFields'] = 'COUNT(tt_news.uid)';
-			}
+        if (($res = $this->exec_getQuery('tt_news', $countSelConf))) {
+            list($newsCount) = $this->db->sql_fetch_row($res);
+            $this->db->sql_free_result($res);
+        }
 
-			$newsCount = 0;
-			$countSelConf = $selectConf;
-			unset($countSelConf['orderBy']);
+        $this->newsCount = $newsCount;
 
-			if (($res = $this->exec_getQuery('tt_news', $countSelConf))) {
-				list($newsCount) = $this->db->sql_fetch_row($res);
-				$this->db->sql_free_result($res);
-			}
-			$this->newsCount = $newsCount;
+        // Only do something if the query result is not empty
+        if ($newsCount > 0) {
+            // Init Templateparts: $t['total'] is complete template subpart (TEMPLATE_LATEST f.e.)
+            // $t['item'] is an array with the alternative subparts (NEWS, NEWS_1, NEWS_2 ...)
+            $t = array();
+            $t['total'] = $this->getNewsSubpart($this->templateCode, $this->spMarker('###' . $templateName . '###'));
 
+            $t['item'] = $this->getLayouts($t['total'], $this->alternatingLayouts, 'NEWS');
 
-			// Only do something if the query result is not empty
-			if ($newsCount > 0) {
-				// Init Templateparts: $t['total'] is complete template subpart (TEMPLATE_LATEST f.e.)
-				// $t['item'] is an array with the alternative subparts (NEWS, NEWS_1, NEWS_2 ...)
-				$t = array();
-				$t['total'] = $this->getNewsSubpart($this->templateCode, $this->spMarker('###' . $templateName . '###'));
+            // Parse out markers in the templates to prevent unnecessary queries and code from executing
+            $this->renderMarkers = $this->getMarkers($t['total']);
 
-				$t['item'] = $this->getLayouts($t['total'], $this->alternatingLayouts, 'NEWS');
+            // build query for display:
+            if ($selectConf['leftjoin'] || ($this->theCode == 'RELATED' && $this->relNewsUid)) {
+                $selectConf['selectFields'] = 'DISTINCT tt_news.uid, tt_news.*';
+            } else {
+                $selectConf['selectFields'] = 'tt_news.*';
+            }
 
-				// Parse out markers in the templates to prevent unnecessary queries and code from executing
-				$renderMarkers = $this->getMarkers($t['total']);
-				$this->renderMarkers = array_unique($renderMarkers);
+            // exclude the LATEST template from changing its content with the pagebrowser. This can be overridden by setting the conf var latestWithPagebrowser
+            if ($this->theCode != 'LATEST' || $this->conf['latestWithPagebrowser']) {
+                $selectConf['begin'] = intval($this->piVars[$this->pointerName]) * $this->config['limit'];
+            }
 
-				// build query for display:
-				if ($selectConf['leftjoin'] || ($this->theCode == 'RELATED' && $this->relNewsUid)) {
-					$selectConf['selectFields'] = 'DISTINCT tt_news.uid, tt_news.*';
-				} else {
-					$selectConf['selectFields'] = 'tt_news.*';
-				}
+            $selectConf['max'] = $this->config['limit'];
 
+            // Reset:
+            $subpartArray = array();
+            $wrappedSubpartArray = array();
+            $markerArray = array();
 
-				// exclude the LATEST template from changing its content with the pagebrowser. This can be overridden by setting the conf var latestWithPagebrowser
-				if ($this->theCode != 'LATEST' || $this->conf['latestWithPagebrowser']) {
-					$selectConf['begin'] = intval($this->piVars[$this->pointerName]) * $this->config['limit'];
-				}
+            if ($this->debugTimes) {
+                $this->hObj->getParsetime(__METHOD__);
+            }
 
-				//				if (!$this->conf['excludeAlreadyDisplayedNews']) {
-				//					// exclude news-records shown in LATEST from the LIST template
-				//					if ($this->theCode == 'LIST' && $this->conf['excludeLatestFromList'] && !$this->piVars[$this->pointerName] && !$this->piVars['cat']) {
-				//						if ($this->config['latestLimit']) {
-				//							$selectConf['begin'] += $this->config['latestLimit'];
-				//							$newsCount -= $this->config['latestLimit'];
-				//						} else {
-				//							$selectConf['begin'] += $newsCount;
-				//							// this will clean the display of LIST view when 'latestLimit' is unset because all the news have been shown in LATEST already
-				//						}
-				//					}
-				//
-				//					// List start ID
-				//					if (($this->theCode == 'LIST' || $this->theCode == 'LATEST') && $this->config['listStartId'] && !$this->piVars[$this->pointerName] && !$this->piVars['cat']) {
-				//						$selectConf['begin'] = $this->config['listStartId'];
-				//					}
-				//				}
-				$selectConf['max'] = $this->config['limit'];
+            // get the list of news items and fill them in the CONTENT subpart
+            $subpartArray['###CONTENT###'] = $this->getListContent($t['item'], $selectConf, $prefix_display);
 
-				// Reset:
-				$subpartArray = array();
-				$wrappedSubpartArray = array();
-				$markerArray = array();
+            if ($this->debugTimes) {
+                $this->hObj->getParsetime(__METHOD__);
+            }
 
-				if ($this->debugTimes) {
-					$this->hObj->getParsetime(__METHOD__);
-				}
+            if ($this->isRenderMarker('###NEWS_CATEGORY_ROOTLINE###')) {
+                $markerArray['###NEWS_CATEGORY_ROOTLINE###'] = '';
+                if ($this->conf['catRootline.']['showCatRootline'] && $this->piVars['cat'] && ! strpos($this->piVars['cat'], ',')) {
+                    $markerArray['###NEWS_CATEGORY_ROOTLINE###'] = $this->getCategoryPath(array(
+                            array('catid' => intval($this->piVars['cat']))));
+                }
+            }
 
-				// get the list of news items and fill them in the CONTENT subpart
-				$subpartArray['###CONTENT###'] = $this->getListContent($t['item'], $selectConf, $prefix_display);
+            if ($theCode == 'XML') {
+                $markerArray = $this->getXmlHeader();
+                $subpartArray['###HEADER###'] = $this->cObj->substituteMarkerArray($this->getNewsSubpart($t['total'], '###HEADER###'), $markerArray);
+                if ($this->conf['displayXML.']['xmlFormat']) {
+                    if (! empty($this->rdfToc)) {
+                        $markerArray['###NEWS_RDF_TOC###'] = '<rdf:Seq>' . "\n" . $this->rdfToc . "\t\t\t" . '</rdf:Seq>';
+                    } else {
+                        $markerArray['###NEWS_RDF_TOC###'] = '';
+                    }
+                }
+                $subpartArray['###HEADER###'] = $this->cObj->substituteMarkerArray($this->getNewsSubpart($t['total'], '###HEADER###'), $markerArray);
+            }
 
-				if ($this->debugTimes) {
-					$this->hObj->getParsetime(__METHOD__);
-				}
+            $markerArray['###GOTOARCHIVE###'] = $this->pi_getLL('goToArchive');
+            $markerArray['###LATEST_HEADER###'] = $this->pi_getLL('latestHeader');
+            $wrappedSubpartArray['###LINK_ARCHIVE###'] = $this->local_cObj->typolinkWrap($this->conf['archiveTypoLink.']);
+            // unset pagebrowser markers
+            $markerArray['###LINK_PREV###'] = '';
+            $markerArray['###LINK_NEXT###'] = '';
+            $markerArray['###BROWSE_LINKS###'] = '';
 
-				if ($this->isRenderMarker('###NEWS_CATEGORY_ROOTLINE###')) {
-					$markerArray['###NEWS_CATEGORY_ROOTLINE###'] = '';
-					if ($this->conf['catRootline.']['showCatRootline'] && $this->piVars['cat'] && ! strpos($this->piVars['cat'], ',')) {
-						$markerArray['###NEWS_CATEGORY_ROOTLINE###'] = $this->getCategoryPath(array(
-								array('catid' => intval($this->piVars['cat']))));
-					}
-				}
+            // get generic markers
+            $this->getGenericMarkers($markerArray);
 
-				if ($theCode == 'XML') {
-					$markerArray = $this->getXmlHeader();
-					$subpartArray['###HEADER###'] = $this->cObj->substituteMarkerArray($this->getNewsSubpart($t['total'], '###HEADER###'), $markerArray);
-					if ($this->conf['displayXML.']['xmlFormat']) {
-						if (! empty($this->rdfToc)) {
-							$markerArray['###NEWS_RDF_TOC###'] = '<rdf:Seq>' . "\n" . $this->rdfToc . "\t\t\t" . '</rdf:Seq>';
-						} else {
-							$markerArray['###NEWS_RDF_TOC###'] = '';
-						}
-					}
-					$subpartArray['###HEADER###'] = $this->cObj->substituteMarkerArray($this->getNewsSubpart($t['total'], '###HEADER###'), $markerArray);
-				}
+            // render a pagebrowser if needed
+            if ($newsCount > $this->config['limit'] && ! $this->config['noPageBrowser']) {
 
-				$markerArray['###GOTOARCHIVE###'] = $this->pi_getLL('goToArchive');
-				$markerArray['###LATEST_HEADER###'] = $this->pi_getLL('latestHeader');
-				$wrappedSubpartArray['###LINK_ARCHIVE###'] = $this->local_cObj->typolinkWrap($this->conf['archiveTypoLink.']);
-				// unset pagebrowser markers
-				$markerArray['###LINK_PREV###'] = '';
-				$markerArray['###LINK_NEXT###'] = '';
-				$markerArray['###BROWSE_LINKS###'] = '';
+                $pbConf = $this->conf['pageBrowser.'];
+                // configure pagebrowser vars
+                $this->internal['res_count'] = $newsCount;
+                $this->internal['results_at_a_time'] = $this->config['limit'];
+                $this->internal['maxPages'] = $pbConf['maxPages'];
 
-				// get generic markers
-				$this->getGenericMarkers($markerArray, null);
+                if (! $pbConf['showPBrowserText']) {
+                    $this->overrideLL('pi_list_browseresults_page', ' ');
+                }
+                if ($this->conf['userPageBrowserFunc']) {
+                    $markerArray = $this->userProcess('userPageBrowserFunc', $markerArray);
+                } else {
+                    $this->pi_alwaysPrev = $pbConf['alwaysPrev'];
+                    if ($this->conf['usePiBasePagebrowser'] && $this->isRenderMarker('###BROWSE_LINKS###')) {
 
-				// render a pagebrowser if needed
-				if ($newsCount > $this->config['limit'] && ! $this->config['noPageBrowser']) {
+                        $markerArray = $this->getPagebrowserContent($markerArray, $pbConf, $this->pointerName);
 
-					$pbConf = $this->conf['pageBrowser.'];
-					// configure pagebrowser vars
-					$this->internal['res_count'] = $newsCount;
-					$this->internal['results_at_a_time'] = $this->config['limit'];
-					$this->internal['maxPages'] = $pbConf['maxPages'];
+                    } else {
+                        $markerArray['###BROWSE_LINKS###'] = $this->makePageBrowser($pbConf['showResultCount'], $pbConf['tableParams'], $this->pointerName);
+                    }
+                }
+            }
 
-					if (! $pbConf['showPBrowserText']) {
-						$this->overrideLL('pi_list_browseresults_page', '');
-					}
-					if ($this->conf['userPageBrowserFunc']) {
-						$markerArray = $this->userProcess('userPageBrowserFunc', $markerArray);
-					} else {
+            // Adds hook for processing of extra global markers
+            if (is_array($GLOBALS['TYPO3_CONF_VARS']['EXTCONF']['tt_news']['extraGlobalMarkerHook'])) {
+                foreach ($GLOBALS['TYPO3_CONF_VARS']['EXTCONF']['tt_news']['extraGlobalMarkerHook'] as $_classRef) {
+                    $_procObj = & \TYPO3\CMS\Core\Utility\GeneralUtility::getUserObj($_classRef);
+                    $markerArray = $_procObj->extraGlobalMarkerProcessor($this, $markerArray);
+                }
+            }
+            if (!$this->useUpstreamRenderer) {
+                $content .= $this->cObj->substituteMarkerArrayCached($t['total'], $markerArray, $subpartArray, $wrappedSubpartArray);
+            }
+        } elseif (strpos($where, '1=0') !== false) {
+            // first view of the search page with the parameter 'emptySearchAtStart' set
+            $markerArray['###SEARCH_EMPTY_MSG###'] = $this->local_cObj->stdWrap($this->pi_getLL('searchEmptyMsg'), $this->conf['searchEmptyMsg_stdWrap.']);
+            $searchEmptyMsg = $this->getNewsSubpart($this->templateCode, $this->spMarker('###TEMPLATE_SEARCH_EMPTY###'));
 
-						$this->pi_alwaysPrev = $pbConf['alwaysPrev'];
-						if ($this->conf['usePiBasePagebrowser'] && $this->isRenderMarker('###BROWSE_LINKS###')) {
+            $content .= $this->cObj->substituteMarkerArrayCached($searchEmptyMsg, $markerArray);
+        } elseif ($this->piVars['swords']) {
+            // no results
+            $markerArray['###SEARCH_EMPTY_MSG###'] = $this->local_cObj->stdWrap($this->pi_getLL('noResultsMsg'), $this->conf['searchEmptyMsg_stdWrap.']);
+            $searchEmptyMsg = $this->getNewsSubpart($this->templateCode, $this->spMarker('###TEMPLATE_SEARCH_EMPTY###'));
+            $content .= $this->cObj->substituteMarkerArrayCached($searchEmptyMsg, $markerArray);
+        } elseif ($theCode == 'XML') {
+            // fill at least the template header
+            // Init Templateparts: $t['total'] is complete template subpart (TEMPLATE_LATEST f.e.)
+            $t = array();
+            $t['total'] = $this->getNewsSubpart($this->templateCode, $this->spMarker('###' . $templateName . '###'));
 
-							$markerArray = $this->getPagebrowserContent($markerArray, $pbConf, $this->pointerName);
+            $this->renderMarkers = $this->getMarkers($t['total']);
 
-						} else {
-							$markerArray['###BROWSE_LINKS###'] = $this->makePageBrowser($pbConf['showResultCount'], $pbConf['tableParams'], $this->pointerName);
-						}
-					}
-				}
+            // Reset:
+            $subpartArray = array();
+            // header data
+            $markerArray = $this->getXmlHeader();
+            $subpartArray['###HEADER###'] = $this->cObj->substituteMarkerArray($this->getNewsSubpart($t['total'], '###HEADER###'), $markerArray);
+            // substitute the xml declaration (it's not included in the subpart ###HEADER###)
+            $t['total'] = $this->cObj->substituteMarkerArray($t['total'], array(
+                    '###XML_DECLARATION###' => $markerArray['###XML_DECLARATION###']));
+            $t['total'] = $this->cObj->substituteMarkerArray($t['total'], array('###SITE_LANG###' => $markerArray['###SITE_LANG###']));
+            $t['total'] = $this->cObj->substituteSubpart($t['total'], '###HEADER###', $subpartArray['###HEADER###'], 0);
+            $t['total'] = $this->cObj->substituteSubpart($t['total'], '###CONTENT###', '', 0);
 
-				// Adds hook for processing of extra global markers
-				if (is_array($GLOBALS['TYPO3_CONF_VARS']['EXTCONF']['tt_news']['extraGlobalMarkerHook'])) {
-					foreach ($GLOBALS['TYPO3_CONF_VARS']['EXTCONF']['tt_news']['extraGlobalMarkerHook'] as $_classRef) {
-						$_procObj = & \TYPO3\CMS\Core\Utility\GeneralUtility::getUserObj($_classRef);
-						$markerArray = $_procObj->extraGlobalMarkerProcessor($this, $markerArray);
-					}
-				}
-				if (!$this->useUpstreamRenderer) {
-					$content .= $this->cObj->substituteMarkerArrayCached($t['total'], $markerArray, $subpartArray, $wrappedSubpartArray);
-				}
-			} elseif (strpos($where, '1=0') !== false) {
-				// first view of the search page with the parameter 'emptySearchAtStart' set
-				$markerArray['###SEARCH_EMPTY_MSG###'] = $this->local_cObj->stdWrap($this->pi_getLL('searchEmptyMsg'), $this->conf['searchEmptyMsg_stdWrap.']);
-				$searchEmptyMsg = $this->getNewsSubpart($this->templateCode, $this->spMarker('###TEMPLATE_SEARCH_EMPTY###'));
-
-				$content .= $this->cObj->substituteMarkerArrayCached($searchEmptyMsg, $markerArray);
-			} elseif ($this->piVars['swords']) {
-				// no results
-				$markerArray['###SEARCH_EMPTY_MSG###'] = $this->local_cObj->stdWrap($this->pi_getLL('noResultsMsg'), $this->conf['searchEmptyMsg_stdWrap.']);
-				$searchEmptyMsg = $this->getNewsSubpart($this->templateCode, $this->spMarker('###TEMPLATE_SEARCH_EMPTY###'));
-				$content .= $this->cObj->substituteMarkerArrayCached($searchEmptyMsg, $markerArray);
-			} elseif ($theCode == 'XML') {
-				// fill at least the template header
-				// Init Templateparts: $t['total'] is complete template subpart (TEMPLATE_LATEST f.e.)
-				$t = array();
-				$t['total'] = $this->getNewsSubpart($this->templateCode, $this->spMarker('###' . $templateName . '###'));
-
-				$renderMarkers = $this->getMarkers($t['total']);
-				$this->renderMarkers = array_unique($renderMarkers);
-
-				// Reset:
-				$subpartArray = array();
-				// header data
-				$markerArray = $this->getXmlHeader();
-				$subpartArray['###HEADER###'] = $this->cObj->substituteMarkerArray($this->getNewsSubpart($t['total'], '###HEADER###'), $markerArray);
-				// substitute the xml declaration (it's not included in the subpart ###HEADER###)
-				$t['total'] = $this->cObj->substituteMarkerArray($t['total'], array(
-						'###XML_DECLARATION###' => $markerArray['###XML_DECLARATION###']));
-				$t['total'] = $this->cObj->substituteMarkerArray($t['total'], array('###SITE_LANG###' => $markerArray['###SITE_LANG###']));
-				$t['total'] = $this->cObj->substituteSubpart($t['total'], '###HEADER###', $subpartArray['###HEADER###'], 0);
-				$t['total'] = $this->cObj->substituteSubpart($t['total'], '###CONTENT###', '', 0);
-
-				$content .= $t['total'];
-			} elseif ($this->arcExclusive && $this->piVars['pS'] && $this->tsfe->sys_language_content) {
-				$markerArray = array();
-				// this matches if a user has switched languages within a archive period that contains no items in the desired language
-				$content .= $this->local_cObj->stdWrap($this->pi_getLL('noNewsForArchPeriod'), $this->conf['noNewsToListMsg_stdWrap.']);
-			} else {
-				$markerArray = array();
-				$content .= $this->local_cObj->stdWrap($this->pi_getLL('noNewsToListMsg'), $this->conf['noNewsToListMsg_stdWrap.']);
-			}
-		}
+            $content .= $t['total'];
+        } elseif ($this->arcExclusive && $this->piVars['pS'] && $this->tsfe->sys_language_content) {
+            $markerArray = array();
+            // this matches if a user has switched languages within a archive period that contains no items in the desired language
+            $content .= $this->local_cObj->stdWrap($this->pi_getLL('noNewsForArchPeriod'), $this->conf['noNewsToListMsg_stdWrap.']);
+        } else {
+            $markerArray = array();
+            $content .= $this->local_cObj->stdWrap($this->pi_getLL('noNewsToListMsg'), $this->conf['noNewsToListMsg_stdWrap.']);
+        }
 
 		if ($this->conf['upstreamRendererFunc']) {
 			if (!isset($markerArray)) {
@@ -890,13 +874,7 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 
 		if ($this->allowCaching) {
 			// if there is a GETvar in the URL that is not in this list, caching will be disabled for the pagebrowser links
-
-
-			$this->pi_isOnlyFields = $pointerName . ',tt_news,year,month,day,pS,pL,arc,cat';
-
-			// pi_lowerThan limits the amount of cached pageversions for the list view. Caching will be disabled if one of the vars in $this->pi_isOnlyFields has a value greater than $this->pi_lowerThan
-			// 							$this->pi_lowerThan = ceil($this->internal['res_count']/$this->internal['results_at_a_time']);
-
+            $this->pi_isOnlyFields = $pointerName . ',tt_news,year,month,day,pS,pL,arc,cat';
 
 			$pi_isOnlyFieldsArr = explode(',', $this->pi_isOnlyFields);
 			$highestVal = 0;
@@ -912,11 +890,13 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 		$markerArray['###BROWSE_LINKS###'] = $this->pi_list_browseresults($pbConf['showResultCount'], $pbConf['tableParams'], $wrapArr, $pointerName, $pbConf['hscText']);
 
 		if ($this->conf['useHRDates']) {
-			// restore pS & pL
-			if ($tmpPS)
-				$this->piVars['pS'] = $tmpPS;
-			if ($tmpPL)
-				$this->piVars['pL'] = $tmpPL;
+            // restore pS & pL
+            if ($tmpPS) {
+                $this->piVars['pS'] = $tmpPS;
+            }
+            if ($tmpPL) {
+                $this->piVars['pL'] = $tmpPL;
+            }
 		}
 
 		return $markerArray;
@@ -942,9 +922,6 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 
 		$lConf = $this->conf[$prefix_display . '.'];
 		$res = $this->exec_getQuery('tt_news', $selectConf); //get query for list contents
-
-//				debug($selectConf, $this->theCode.' final $selectConf (' . __CLASS__ . '::' . __FUNCTION__ . ')', __LINE__, __FILE__, 3);
-
 
 		// make some final config manipulations
 		// overwrite image sizes from TS with the values from content-element if they exist.
@@ -1005,12 +982,7 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 			}
 				// Then get localization of record:
 			if ($this->tsfe->sys_language_content) {
-				// prevent link targets from being changed in localized records
-				$tmpPage = $row['page'];
-				$tmpExtURL = $row['ext_url'];
 				$row = $this->tsfe->sys_page->getRecordOverlay('tt_news', $row, $this->tsfe->sys_language_content, $this->tsfe->sys_language_contentOL, '');
-				$row['page'] = $tmpPage;
-				$row['ext_url'] = $tmpExtURL;
 			}
 
 				// Register displayed news item globally:
@@ -1022,10 +994,8 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 				$this->config['catOrderBy'] = $this->conf[$prefix_display . '.']['catOrderBy'];
 			}
 
-			//			if ($this->isRenderMarker('###NEWS_CATEGORY_ROOTLINE###')) {
 			$this->categories = array();
 			$this->categories[$row['uid']] = $this->getCategories($row['uid']);
-			//			}
 
 			$catSPid = FALSE;
 			if ($row['type'] == 1 || $row['type'] == 2) {
@@ -1034,8 +1004,8 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 				$wrappedSubpartArray['###LINK_ITEM###'] = $this->local_cObj->typolinkWrap($this->conf['pageTypoLink.']);
 
 				// fill the link string in a register to access it from TS
-				$this->local_cObj->LOAD_REGISTER(array(
-						'newsMoreLink' => $this->local_cObj->typolink($this->pi_getLL('more'), $this->conf['pageTypoLink.'])), '');
+				$this->local_cObj->cObjGetSingle('LOAD_REGISTER', array(
+						'newsMoreLink' => $this->local_cObj->typolink($this->pi_getLL('more'), $this->conf['pageTypoLink.'])));
 			} else {
 				//  Overwrite the singlePid from config-array with a singlePid given from the first entry in $this->categories
 				if ($this->conf['useSPidFromCategory'] && is_array($this->categories)) {
@@ -1143,7 +1113,16 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 			$OLmode = ($this->sys_language_mode == 'strict' ? 'hideNonTranslated' : '');
 			$row = $this->tsfe->sys_page->getRecordOverlay('tt_news', $row, $this->tsfe->sys_language_content, $OLmode);
 		}
-			// Register displayed news item globally:
+
+		// Adds hook for processing of extra item array
+		if (is_array($GLOBALS['TYPO3_CONF_VARS']['EXTCONF']['tt_news']['extraItemArrayHook'])) {
+			foreach ($GLOBALS['TYPO3_CONF_VARS']['EXTCONF']['tt_news']['extraItemArrayHook'] as $_classRef) {
+				$_procObj = & \TYPO3\CMS\Core\Utility\GeneralUtility::getUserObj($_classRef);
+				$row = $_procObj->extraItemArrayProcessor($row, $lConf, $this);
+			}
+		}
+
+		// Register displayed news item globally:
 		$GLOBALS['T3_VAR']['displayedNews'][] = $row['uid'];
 		$markerArray = array();
 
@@ -1171,9 +1150,8 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 				if (! $item) {
 					$item = $this->getNewsSubpart($this->templateCode, $this->spMarker('###TEMPLATE_' . $this->theCode . '###'), $row);
 				}
-				$renderMarkers = $this->getMarkers($item);
-				$this->renderMarkers = array_unique($renderMarkers);
 
+        $this->renderMarkers = $this->getMarkers($item);
 
 				// build the backToList link
 				if ($this->conf['useHRDates']) {
@@ -1184,7 +1162,6 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 						$this->config['singleViewPointerName'] => null), $this->allowCaching, ($this->conf['dontUseBackPid'] ? 1 : 0), $this->config['backPid']));
 				}
 			}
-
 
 			// set the title of the single view page to the title of the news record
 			if ($this->conf['substitutePagetitle']) {
@@ -1211,26 +1188,28 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 				$content = $this->cObj->substituteMarkerArrayCached($item, $markerArray, array(), $wrappedSubpartArray);
 			}
 
-		} elseif ($this->sys_language_mode == 'strict' && $this->tt_news_uid && $this->tsfe->sys_language_content) { // not existing translation
+		} elseif ($this->sys_language_mode == 'strict' && $this->tt_news_uid && $this->tsfe->sys_language_content) {
+            // not existing translation
+            if($this->conf['redirectNoTranslToList']) {
+                // redirect to list page
+				$this->pi_linkToPage(' ', $this->conf['backPid']);
+                \TYPO3\CMS\Core\Utility\HttpUtility::redirect($this->cObj->lastTypoLinkUrl);
+			}
+
 			$this->upstreamVars['mode'] = 'noTranslation';
 			$noTranslMsg = $this->local_cObj->stdWrap($this->pi_getLL('noTranslMsg'), $this->conf['noNewsIdMsg_stdWrap.']);
 			$content = $noTranslMsg;
-		} elseif ($row['pid'] < 0) { // a non-public version of a record was requested
+		} elseif ($row['pid'] < 0) {
+            // a non-public version of a record was requested
 			$this->upstreamVars['mode'] = 'nonPlublicVersion';
 			$nonPlublicVersion = $this->local_cObj->stdWrap($this->pi_getLL('nonPlublicVersionMsg'), $this->conf['nonPlublicVersionMsg_stdWrap.']);
 			$content = $nonPlublicVersion;
-		} else { // if singleview is shown with no tt_news uid given from GETvars (&tx_ttnews[tt_news]=) an error message is displayed.
+		} else {
+            // if singleview is shown with no tt_news uid given from GETvars (&tx_ttnews[tt_news]=) an error message is displayed.
 			$this->upstreamVars['mode'] = 'noNewsId';
 			$noNewsIdMsg = $this->local_cObj->stdWrap($this->pi_getLL('noNewsIdMsg'), $this->conf['noNewsIdMsg_stdWrap.']);
 			$content = $noNewsIdMsg;
 		}
-
-//		if (is_array($GLOBALS['TYPO3_CONF_VARS']['EXTCONF']['tt_news']['upstreamRendererHook'])) {
-//			foreach ($GLOBALS['TYPO3_CONF_VARS']['EXTCONF']['tt_news']['upstreamRendererHook'] as $_classRef) {
-//				$_procObj = & \TYPO3\CMS\Core\Utility\GeneralUtility::getUserObj($_classRef,false);
-//				$content = $_procObj->processUpstreamRendererHook($row, $markerArray, $content, $this);
-//			}
-//		}
 
 		if ($this->conf['upstreamRendererFunc']) {
 			$content = $this->userProcess('upstreamRendererFunc', array('row' => $row, 'markerArray' => $markerArray, 'content' => $content));
@@ -1251,8 +1230,9 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 	 * @return	string		html code of the archive menu
 	 */
 	function displayArchiveMenu() {
-		if ($this->debugTimes)
-			$this->hObj->getParsetime(__METHOD__ . ' start');
+		if ($this->debugTimes) {
+            $this->hObj->getParsetime(__METHOD__ . ' start');
+        }
 
 		$this->arcExclusive = 1;
 		$selectConf = $this->getSelectConf('', 1);
@@ -1262,7 +1242,6 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 		$row = $this->getArchiveMenuRange($selectConf);
 
 		if ($row['minval'] || $row['maxval']) {
-			// if ($row['minval']) {
 			$dateArr = array();
 			$arcMode = $this->config['archiveMode'];
 			$c = 0;
@@ -1278,19 +1257,21 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 					case 'year' :
 						$theDate = mktime(0, 0, 0, 1, 1, date('Y', $row['minval']) + $c);
 						break;
+                    default:
+                        break;
 				}
 				$dateArr[] = $theDate;
 				$c++;
-				if ($c > 1000)
-					break;
+
+                //TODO: Put this limit into configuration value or class constant!
+				if ($c > 1000) {
+                    break;
+                }
 			}
 
 			if ($this->debugTimes) {
 				$this->hObj->getParsetime(__METHOD__ . ' $dateArr');
 			}
-
-			//			$selectConf['where'] .= $this->enableFields;
-
 
 			if ($selectConf['pidInList']) {
 				$selectConf['where'] .= ' AND tt_news.pid IN (' . $selectConf['pidInList'] . ')';
@@ -1301,7 +1282,6 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 			if ($this->cache_amenuPeriods) {
 				$storeKey = md5(serialize(array($this->catExclusive, $this->config['catSelection'], $this->tsfe->sys_language_content,
 						$selectConf['pidInList'], $arcMode)));
-				//				$cachedPeriodAccum = $this->tsfe->sys_page->getHash($storeKey);
 				$cachedPeriodAccum = $this->cache->get($storeKey);
 			}
 
@@ -1341,7 +1321,6 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 					if ($this->writeCachingInfoToDevlog) {
 						\TYPO3\CMS\Core\Utility\GeneralUtility::devLog('CACHE MISS (' . __CLASS__ . '::' . __FUNCTION__ . ')', 'tt_news', 2, array());
 					}
-					//					$this->tsfe->sys_page->storeHash($storeKey, serialize($periodAccum), 'news_amenuPeriodsCache');
 					$this->cache->set($storeKey, serialize($periodAccum), __FUNCTION__);
 				}
 
@@ -1354,8 +1333,7 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 			$t['total'] = $this->getNewsSubpart($this->templateCode, $this->spMarker('###TEMPLATE_ARCHIVE###'));
 			$t['item'] = $this->getLayouts($t['total'], $this->alternatingLayouts, 'MENUITEM');
 
-			$renderMarkers = $this->getMarkers($t['total']);
-			$this->renderMarkers = array_unique($renderMarkers);
+            $this->renderMarkers = $this->getMarkers($t['total']);
 
 			$tCount = count($t['item']);
 			$cc = 0;
@@ -1403,15 +1381,13 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 				}
 
 				$yearTitle = '';
-				if ($this->conf['showYearHeadersInAmenu'] && $arcMode != 'year') {
-					if ($year != $oldyear) {
-						if ($pArr['start'] < 20000) {
-							$yearTitle = 'no date';
-						} else {
-							$yearTitle = $year;
-						}
-						$oldyear = $year;
-					}
+				if ($this->conf['showYearHeadersInAmenu'] && $arcMode != 'year' && $year != $oldyear) {
+                    if ($pArr['start'] < 20000) {
+                        $yearTitle = 'no date';
+                    } else {
+                        $yearTitle = $year;
+                    }
+                    $oldyear = $year;
 				}
 
 				$veryLocal_cObj->start($pArr, 'tt_news');
@@ -1533,7 +1509,7 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 				if (is_array($GLOBALS['TYPO3_CONF_VARS']['EXTCONF']['tt_news']['userDisplayCatmenuHook'])) {
 					foreach ($GLOBALS['TYPO3_CONF_VARS']['EXTCONF']['tt_news']['userDisplayCatmenuHook'] as $_classRef) {
 						$_procObj = & \TYPO3\CMS\Core\Utility\GeneralUtility::getUserObj($_classRef);
-						$content = $_procObj->userDisplayCatmenu($lConf, $this);
+						$content .= $_procObj->userDisplayCatmenu($lConf, $this);
 					}
 				}
 				break;
@@ -1606,7 +1582,7 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 				$fImgFile = ($this->conf['flagPath'] ? $this->conf['flagPath'] : 'media/flags/flag_') . $this->langArr[$row['sys_language_uid']]['flag'];
 				$fImgConf = $this->conf['flagImage.'];
 				$fImgConf['file'] = $fImgFile;
-				$flagImg = $this->local_cObj->IMAGE($fImgConf);
+                $flagImg = $this->local_cObj->cObjGetSingle('IMAGE', $fImgConf);
 				$markerArray['###NEWS_LANGUAGE###'] .= $flagImg;
 			}
 		}
@@ -1637,21 +1613,18 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 			}
 		}
 
-		if ($this->isRenderMarker('###NEWS_SUBHEADER###')) {
-			if (! $this->piVars[$this->config['singleViewPointerName']] || $this->conf['subheaderOnAllSViewPages']) {
-				$markerArray['###NEWS_SUBHEADER###'] = $this->formatStr($this->local_cObj->stdWrap($row['short'], $lConf['subheader_stdWrap.']));
-			}
+		if ($this->isRenderMarker('###NEWS_SUBHEADER###') && (! $this->piVars[$this->config['singleViewPointerName']] || $this->conf['subheaderOnAllSViewPages'])) {
+            $markerArray['###NEWS_SUBHEADER###'] = $this->formatStr($this->local_cObj->stdWrap($row['short'], $lConf['subheader_stdWrap.']));
 		}
 		if ($row['keywords'] && $this->isRenderMarker('###NEWS_KEYWORDS###')) {
 			$markerArray['###NEWS_KEYWORDS###'] = $this->local_cObj->stdWrap($row['keywords'], $lConf['keywords_stdWrap.']);
 		}
 
-		if (! $this->piVars[$this->config['singleViewPointerName']]) {
-			if ($textRenderObj == 'displaySingle') {
-				// load the keywords in the register 'newsKeywords' to access it from TS
-				$this->local_cObj->LOAD_REGISTER(array('newsKeywords' => $row['keywords'], 'newsSubheader' => $row['short']), '');
-			}
+		if (! $this->piVars[$this->config['singleViewPointerName']] && $textRenderObj == 'displaySingle') {
+            // load the keywords in the register 'newsKeywords' to access it from TS
+            $this->local_cObj->cObjGetSingle('LOAD_REGISTER', array('newsKeywords' => $row['keywords'], 'newsSubheader' => $row['short']));
 		}
+
 		$sViewPagebrowser = FALSE;
 		$newscontent = FALSE;
 		if ($this->isRenderMarker('###NEWS_CONTENT###')) {
@@ -1758,10 +1731,8 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 			$this->getXmlMarkers($markerArray, $row, $lConf);
 		}
 
-		$this->getGenericMarkers($markerArray, $row);
-
+		$this->getGenericMarkers($markerArray);
 		//		debug($markerArray, ' ('.__CLASS__.'::'.__FUNCTION__.')', __LINE__, __FILE__, 3);
-
 
 		// Adds hook for processing of extra item markers
 		if (is_array($GLOBALS['TYPO3_CONF_VARS']['EXTCONF']['tt_news']['extraItemMarkerHook'])) {
@@ -1907,20 +1878,24 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 		unset($confSave, $configSave, $local_cObjSave);
 	}
 
+    function getGenericMarkers(&$markerArray)
+    {
+        $lConf = $this->genericMarkerConf;
 
-	function getGenericMarkers(&$markerArray, $row) {
-		$lConf = $this->genericMarkerConf;
-		if (! is_array($lConf)) {
-			return;
-		} else {
-			while (list($mName) = each($lConf)) {
-				if (is_array($lConf[$mName . '.'])) {
-					$markerArray['###GENERIC_' . strtoupper($mName) . '###'] = $this->local_cObj->cObjGetSingle($lConf[$mName], $lConf[$mName . '.'], 'tt_news generic marker: ' . $mName);
-				}
-			}
-		}
-	}
+        if (!is_array($lConf)) {
+            return;
+        } else {
+            while (list($mName) = each($lConf)) {
+                $genericMarker = '###GENERIC_' . strtoupper($mName) . '###';
 
+                if (!is_array($lConf[$mName . '.']) || !$this->isRenderMarker($genericMarker)) {
+                    continue;
+                }
+
+                $markerArray[$genericMarker] = $this->local_cObj->cObjGetSingle($lConf[$mName], $lConf[$mName . '.'], 'tt_news generic marker: ' . $mName);
+            }
+        }
+    }
 
 	function initGenericMarkers() {
 		if (is_array($this->conf['genericmarkers.'])) {
@@ -1932,7 +1907,6 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 			}
 		}
 	}
-
 
 	/**
 	 * [Describe function...]
@@ -2004,30 +1978,26 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 
 	/**
 	 * @param $getPrev
-	 * @param $selectConf
-	 * @param $fN
-	 * @param $fV
+	 * @param array $selectConf
+	 * @param string $fN
+	 * @param mixed $fV
 	 * @return mixed
 	 */
 	function getPrevNextRec($getPrev, $selectConf, $fN, $fV) {
 
-		$select_fields = 'tt_news.uid, tt_news.title, tt_news.' . $fN;
-		$from_table = 'tt_news' . ($selectConf['leftjoin'] ? ' LEFT JOIN ' . $selectConf['leftjoin'] : '');
-		$where = $selectConf['where'];
-		$where .= ' AND tt_news.' . $fN . ($getPrev ? '<' : '>') . (int) $fV;
-
-		$groupBy = '';
-		$orderBy = 'tt_news.' . $fN . ($getPrev ? ' DESC' : ' ASC');
-		$limit = 1;
-
-		$rows = $this->db->exec_SELECTgetRows($select_fields, $from_table, $where, $groupBy, $orderBy, $limit);
+        $row = $this->db->exec_SELECTgetSingleRow(
+            'tt_news.uid, tt_news.title, tt_news.' . $fN.($fN == 'datetime' ? '' : ', tt_news.datetime'),
+            'tt_news' . ($selectConf['leftjoin'] ? ' LEFT JOIN ' . $selectConf['leftjoin'] : ''),
+            $selectConf['where'] . ' AND tt_news.' . $fN . ($getPrev ? '<' : '>') . '"'.$fV.'"',
+            '',
+            'tt_news.' . $fN . ($getPrev ? ' DESC' : ' ASC'));
 
 		/**
 		 * TODO: 05.05.2009
 		 * lang overlay
 		 */
 
-		return $rows[0];
+		return $row;
 	}
 
 
@@ -2088,7 +2058,7 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 				}
 
 				$catTextLenght += strlen($catTitle);
-				if ($this->config['catImageMode'] == 0 or empty($val['image'])) {
+				if ($this->config['catImageMode'] == 0 || empty($val['image'])) {
 					$markerArray['###NEWS_CATEGORY_IMAGE###'] = '';
 				} else {
 					$catPicConf = array();
@@ -2102,10 +2072,12 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 						if ($this->config['catImageMode'] == 2) {
 							// link to category shortcut
 							$sCpageId = $val['shortcut'];
-							$sCpage = $this->pi_getRecord('pages', $sCpageId); // get the title of the shortcut page
+                            // get the title of the shortcut page
+							$sCpage = $this->pi_getRecord('pages', $sCpageId);
 							$catPicConf['image.']['altText'] = $sCpage['title'] ? $this->pi_getLL('altTextCatShortcut') . $sCpage['title'] : '';
 							$catPicConf['image.']['stdWrap.']['innerWrap'] = $this->pi_linkToPage('|', $val['shortcut'], $this->conf['itemLinkTarget']);
 						}
+
 						if ($this->config['catImageMode'] == 3) {
 							// act as category selector
 							$catPicConf['image.']['altText'] = $this->pi_getLL('altTextCatSelector') . $catTitle;
@@ -2124,13 +2096,13 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 					}
 
 					// add linked category image to output array
-					$img = $this->local_cObj->IMAGE($catPicConf['image.']);
+                    $img = $this->local_cObj->cObjGetSingle('IMAGE', $catPicConf['image.']);
 					$swrap = ($val['parent_category'] > 0 ? 'subCategoryImgItem_stdWrap.' : 'categoryImgItem_stdWrap.');
 					$theCatImgCodeArray[] = $this->local_cObj->stdWrap($img, $lConf[$swrap]);
 				}
 				if (! $wroteRegister) {
 					// Load the uid of the first assigned category to the register 'newsCategoryUid'
-					$this->local_cObj->LOAD_REGISTER(array('newsCategoryUid' => $val['catid']), '');
+					$this->local_cObj->cObjGetSingle('LOAD_REGISTER', array('newsCategoryUid' => $val['catid']));
 					$wroteRegister = true;
 				}
 			}
@@ -2198,46 +2170,50 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 				$markerArray = $this->getSingleViewImages($lConf, $imgs, $imgsCaptions, $imgsAltTexts, $imgsTitleTexts, $imageNum, $markerArray);
 			} else {
 
-				$imageMode = (strpos($textRenderObj, 'LATEST') ? $lConf['latestImageMode'] : $lConf['listImageMode']);
+				$imageMode = $textRenderObj == 'displayLatest' ? $lConf['latestImageMode'] : $lConf['listImageMode'];
 
 				$suf = '';
-				if (is_numeric(substr($lConf['image.']['file.']['maxW'], - 1))) { // 'm' or 'c' not set by TS
-					if ($imageMode) {
-						switch ($imageMode) {
-							case 'resize2max' :
-								$suf = 'm';
-								break;
-							case 'crop' :
-								$suf = 'c';
-								break;
-							case 'resize' :
-								$suf = '';
-								break;
-						}
-					}
+				if (is_numeric(substr($lConf['image.']['file.']['maxW'], - 1)) && $imageMode) {
+                    // 'm' or 'c' not set by TS
+                    switch ($imageMode) {
+                        case 'resize2max' :
+                            $suf = 'm';
+                            break;
+                        case 'crop' :
+                            $suf = 'c';
+                            break;
+                        case 'resize' :
+                            $suf = '';
+                            break;
+                        default:
+                            break;
+                    }
 				}
 
 				// only insert width/height if it is not given by TS and width/height is empty
-				if ($lConf['image.']['file.']['maxW'] && ! $lConf['image.']['file.']['width']) {
+				if ($suf && $lConf['image.']['file.']['maxW'] && ! $lConf['image.']['file.']['width']) {
 					$lConf['image.']['file.']['width'] = $lConf['image.']['file.']['maxW'] . $suf;
 					unset($lConf['image.']['file.']['maxW']);
 				}
-				if ($lConf['image.']['file.']['maxH'] && ! $lConf['image.']['file.']['height']) {
+				if ($suf && $lConf['image.']['file.']['maxH'] && ! $lConf['image.']['file.']['height']) {
 					$lConf['image.']['file.']['height'] = $lConf['image.']['file.']['maxH'] . $suf;
 					unset($lConf['image.']['file.']['maxH']);
 				}
 
 				$cc = 0;
 				foreach ($imgs as $val) {
-					if ($cc == $imageNum)
-						break;
+					if ($cc == $imageNum) {
+                        break;
+                    }
+
 					if ($val) {
 						$lConf['image.']['altText'] = $imgsAltTexts[$cc];
 						$lConf['image.']['titleText'] = $imgsTitleTexts[$cc];
 						$lConf['image.']['file'] = 'uploads/pics/' . $val;
 
-						$theImgCode .= $this->local_cObj->IMAGE($lConf['image.']) . $this->local_cObj->stdWrap($imgsCaptions[$cc], $lConf['caption_stdWrap.']);
+                        $theImgCode .= $this->local_cObj->cObjGetSingle('IMAGE', $lConf['image.']) . $this->local_cObj->stdWrap($imgsCaptions[$cc], $lConf['caption_stdWrap.']);
 					}
+
 					$cc++;
 				}
 
@@ -2248,11 +2224,10 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 				}
 			}
 		}
+
 		if ($this->debugTimes) {
 			$this->hObj->getParsetime(__METHOD__);
 		}
-		//		debug($markerArray, '$$markerArray ('.__CLASS__.'::'.__FUNCTION__.')', __LINE__, __FILE__, 2);
-
 
 		return $markerArray;
 	}
@@ -2319,38 +2294,25 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 		$cc = 0;
 		$theImgCode = '';
 		foreach ($imgs as $val) {
-			if ($cc == $imageNum)
-				break;
+			if ($cc == $imageNum) {
+                break;
+            }
 			if ($val) {
 				if (! empty($sViewSplitLConf[$cc])) {
 					$lConf = $sViewSplitLConf[$cc];
 				}
 
-				//				if (1) {
-				//					$lConf['image.']['imgList.'] = '';
-				//					$lConf['image.']['imgList'] = $val;
-				//					$lConf['image.']['imgPath'] = 'uploads/pics/';
-				//	debug($lConf['image.'], ' ('.__CLASS__.'::'.__FUNCTION__.')', __LINE__, __FILE__, 3);
-				//
-				//					$imgHtml = $this->local_cObj->IMGTEXT($lConf['image.']);
-				//
-				//				} else {
-				$lConf['image.']['altText'] = $imgsAltTexts[$cc];
+                $lConf['image.']['altText'] = $imgsAltTexts[$cc];
 				$lConf['image.']['titleText'] = $imgsTitleTexts[$cc];
 				$lConf['image.']['file'] = 'uploads/pics/' . $val;
 
-				$imgHtml = $this->local_cObj->IMAGE($lConf['image.']) . $this->local_cObj->stdWrap($imgsCaptions[$cc], $lConf['caption_stdWrap.']);
-
-				//				}
-
-
-				//debug($imgHtml, '$imgHtml ('.__CLASS__.'::'.__FUNCTION__.')', __LINE__, __FILE__, 3);
-
+                $imgHtml = $this->local_cObj->cObjGetSingle('IMAGE', $lConf['image.']) . $this->local_cObj->stdWrap($imgsCaptions[$cc], $lConf['caption_stdWrap.']);
 
 				if ($osCount) {
 					if ($iC > 1) {
 						$mName = '###' . $marker . '_' . $lConf['imageMarkerOptionSplit'] . '###';
-					} else { // fall back to the first image marker if only one image has been found
+					} else {
+                        // fall back to the first image marker if only one image has been found
 						$mName = '###' . $marker . '_1###';
 					}
 					$tmpMarkers[$mName]['html'] .= $imgHtml;
@@ -2359,6 +2321,7 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 					$theImgCode .= $imgHtml;
 				}
 			}
+            $GLOBALS['TSFE']->register['IMAGE_NUM_CURRENT'] = $cc + 1;
 			$cc++;
 		}
 
@@ -2378,8 +2341,6 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 			}
 			$markerArray['###' . $marker . $m . '###'] = $this->local_cObj->stdWrap($markerArray['###' . $marker . $m . '###'], $lConf['image.']['noImage_stdWrap.']);
 		}
-		//		debug($sViewSplitLConf, '$sViewSplitLConf ('.__CLASS__.'::'.__FUNCTION__.')', __LINE__, __FILE__, 2);
-
 
 		return $markerArray;
 	}
@@ -2440,7 +2401,7 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 				$rows = array($row);
 				if ($this->conf['displaySubCategories'] && $this->config['useSubCategories']) {
 					$subCategories = array();
-					$subcats = implode(',', array_unique(explode(',', tx_ttnews_div::getSubCategories($rows[0]['uid'], $addWhere))));
+					$subcats = implode(',', array_unique(explode(',', \WMDB\TtNews\Lib\tx_ttnews_div::getSubCategories($rows[0]['uid'], $addWhere))));
 
 					$subres = $this->db->exec_SELECTquery('tt_news_cat.*', 'tt_news_cat', 'tt_news_cat.uid IN (' . ($subcats ? $subcats : 0) . ')' . $addWhere, '', 'tt_news_cat.' . $this->config['catOrderBy']);
 
@@ -2537,24 +2498,8 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 				foreach ($theRowArray as $val) {
 					if ($lConf['linkTitles'] && \TYPO3\CMS\Core\Utility\GeneralUtility::inList('2,3', $this->config['catTextMode'])) {
 						$this->tsfe->ATagParams = ($pTmp ? $pTmp . ' ' : '') . 'title="' . $val['title'] . '"';
-						if ($this->config['catTextMode'] == 2) {
-							// link to category shortcut
-							$target = ($val['shortcut'] ? $val['shortcut_target'] : '');
-							$pageID = ($val['shortcut'] ? $val['shortcut'] : $catSelLinkParams);
-							$linkedTitle = $this->pi_linkToPage($val['title'], $pageID, $target);
-							$output[] = $this->local_cObj->stdWrap($linkedTitle, $lConf['title_stdWrap.']);
-						} elseif ($this->config['catTextMode'] == 3) {
-							if ($this->conf['useHRDates']) {
-								$output[] = $this->local_cObj->stdWrap($this->pi_linkTP_keepPIvars($val['title'], array('cat' => $val['uid'],
-										'year' => ($this->piVars['year'] ? $this->piVars['year'] : null),
-										'month' => ($this->piVars['month'] ? $this->piVars['month'] : null), 'backPid' => null,
-										'tt_news' => null, $this->pointerName => null), $this->allowCaching, 0, $catSelLinkParams), $lConf['title_stdWrap.']);
-							} else {
-								$output[] = $this->local_cObj->stdWrap($this->pi_linkTP_keepPIvars($val['title'], array('cat' => $val['uid'],
-										'backPid' => null, 'tt_news' => null, $this->pointerName => null), $this->allowCaching, 0, $catSelLinkParams), $lConf['title_stdWrap.']);
-							}
-						}
-					} else {
+                        $output = $this->handleCatTextMode($val, $catSelLinkParams, $lConf, $output);
+                    } else {
 						$output[] = $this->local_cObj->stdWrap($val['title'], $lConf['title_stdWrap.']);
 					}
 				}
@@ -2661,8 +2606,8 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 		$this->config = $this->conf;
 		$this->arcExclusive = $this->conf['archive'];
 		$this->LOCAL_LANG_loaded = FALSE;
-		$this->pi_loadLL(); // reload language-labels
-
+        // reload language-labels
+		$this->pi_loadLL();
 
 		$this->theCode = 'RELATED';
 		$this->relNewsUid = $uid;
@@ -2762,14 +2707,17 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 					$currentCats = $this->getCategories($relrow['uid'], true);
 				}
 				if ($this->conf['checkCategoriesOfRelatedNews']) {
-					if (count($currentCats)) { // record has categories
+					if (count($currentCats)) {
+                        // record has categories
 						foreach ($currentCats as $cUid) {
-							if (\TYPO3\CMS\Core\Utility\GeneralUtility::inList($visibleCategories, $cUid['catid'])) { // if the record has at least one visible category assigned it will be shown
+							if (\TYPO3\CMS\Core\Utility\GeneralUtility::inList($visibleCategories, $cUid['catid'])) {
+                                // if the record has at least one visible category assigned it will be shown
 								$relrows[$relrow['uid']] = $relrow;
 								break;
 							}
 						}
-					} else { // record has NO categories
+					} else {
+                        // record has NO categories
 						$relrows[$relrow['uid']] = $relrow;
 					}
 				} else {
@@ -2784,8 +2732,6 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 					}
 				}
 			}
-			//			debug($relrows, '$relrows ('.__CLASS__.'::'.__FUNCTION__.')', __LINE__, __FILE__, 3);
-
 
 			$this->db->sql_free_result($res);
 			if (is_array($relPages[0]) && $this->conf['usePagesRelations']) {
@@ -2812,7 +2758,8 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 				}
 				$veryLocal_cObj->start($row, 'tt_news');
 
-				if ($row['type'] != 1 && $row['type'] != 2) { // only normal news
+				if ($row['type'] != 1 && $row['type'] != 2) {
+                    // only normal news
 					$catSPid = false;
 					if ($row['sPidByCat'] && $this->conf['useSPidFromCategory']) {
 						$catSPid = $row['sPidByCat'];
@@ -2843,7 +2790,7 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 					}
 
 					// load the parameter string into the register 'newsAddParams' to access it from TS
-					$veryLocal_cObj->LOAD_REGISTER(array('newsAddParams' => $newsAddParams, 'newsSinglePid' => $sPid), '');
+					$veryLocal_cObj->cObjGetSingle('LOAD_REGISTER', array('newsAddParams' => $newsAddParams, 'newsSinglePid' => $sPid));
 
 					if (! $this->conf['getRelatedCObject.']['10.']['default.']['10.']['typolink.']['parameter'] || $catSPid) {
 						$this->conf['getRelatedCObject.']['10.']['default.']['10.']['typolink.']['parameter'] = $sPid;
@@ -2958,7 +2905,7 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 			List browsing box:
 		-->
 		<div' . $this->pi_classParam('browsebox') . '>' . ($showResultCount ? '
-			<p>' . ($this->internal['res_count'] ? sprintf(str_replace('###SPAN_BEGIN###', '<span' . $this->pi_classParam('browsebox-strong') . '>', $this->pi_getLL('pi_list_browseresults_displays', 'Displaying results ###SPAN_BEGIN###%s to %s</span> out of ###SPAN_BEGIN###%s</span>')), $this->internal['res_count'] > 0 ? $pR1 : 0, min(array(
+			<p>' . ($this->internal['res_count'] ? sprintf(str_replace('###SPAN_BEGIN###', '<span' . $this->pi_classParam('browsebox-strong') . '>', $this->pi_getLL('pi_list_browseresults_displays', 'Displaying results ###FROM### to ###TO### out of ###OUT_OF###')), $this->internal['res_count'] > 0 ? $pR1 : 0, min(array(
 				$this->internal['res_count'], $pR2)), $this->internal['res_count']) : $this->pi_getLL('pi_list_browseresults_noResults', 'Sorry, no items were found.')) . '</p>' : '') . '
 
 			<' . trim('table ' . $tableParams) . '>
@@ -3153,7 +3100,6 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 		}
 
 		if (! $this->externalCategorySelection) {
-
 			// exclude LATEST and AMENU from changing their contents with the catmenu. This can be overridden by setting the TSvars 'latestWithCatSelector' or 'amenuWithCatSelector'
 			if ($this->config['catSelection'] && (($this->theCode == 'LATEST' && $this->conf['latestWithCatSelector']) || ($this->theCode == 'AMENU' && $this->conf['amenuWithCatSelector']) || (\TYPO3\CMS\Core\Utility\GeneralUtility::inList('LIST,LIST2,LIST3,HEADER_LIST,SEARCH,XML', $this->theCode)))) {
 				// force 'select categories' mode if cat is given in GPvars
@@ -3178,7 +3124,8 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 					// do not show items with selected categories
 					$selectConf['leftjoin'] = 'tt_news_cat_mm ON tt_news.uid = tt_news_cat_mm.uid_local';
 					$selectConf['where'] .= ' AND (tt_news_cat_mm.uid_foreign NOT IN (' . ($this->catExclusive ? $this->catExclusive : 0) . '))';
-					$selectConf['where'] .= ' AND (tt_news_cat_mm.uid_foreign)'; // filter out not categorized records
+                    // filter out not categorized records
+					$selectConf['where'] .= ' AND (tt_news_cat_mm.uid_foreign)';
 				}
 			} elseif ($this->config['categoryMode']) {
 				// special case: if $this->catExclusive is not set but $this->config['categoryMode'] -> show only non-categorized records
@@ -3190,62 +3137,13 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 
 			// if categoryMode is 'show items AND' it's required to check if the records in the result do actually have the same number of categories as in $this->catExclusive
 			if ($this->catExclusive && $this->config['categoryMode'] == 2) {
-				$tmpCatExclusive = $this->catExclusive  /*$this->actuallySelectedCategories*/;
-				$res = $this->exec_getQuery('tt_news', $selectConf);
-
-				$results = array();
-				$resultsCount = array();
-				while (($row = $this->db->sql_fetch_assoc($res))) {
-					$results[] = $row['uid'];
-					if (in_array($row['uid'], $results)) {
-						$resultsCount[$row['uid']]++;
-					}
-				}
-
-				$catCount = count(explode(',', $tmpCatExclusive));
-
-				$cleanedResultsCount = array();
-				foreach ($resultsCount as $uid => $hits) {
-					if ($hits == $catCount) {
-						$cleanedResultsCount[] = $uid;
-					}
-				}
-
-				$matchlist = implode(',', $cleanedResultsCount);
-				if ($matchlist) {
-					$selectConf['where'] .= ' AND tt_news.uid IN (' . $matchlist . ')';
-				} else {
-					$selectConf['where'] .= ' AND tt_news.uid IN (0)';
-				}
+				$selectConf['where'] .= ' AND tt_news.category = '.count(explode(',', $this->catExclusive));
 			}
 
 			// if categoryMode is 'don't show items OR' we check if each found record does not have any of the deselected categories assigned
 			if ($this->catExclusive && $this->config['categoryMode'] == - 2) {
-				$res = $this->exec_getQuery('tt_news', $selectConf);
-
-				$results = array();
-				//				$resultsCount = array();
-				while (($row = $this->db->sql_fetch_assoc($res))) {
-					$results[$row['uid']] = $row['uid'];
-				}
-				array_unique($results);
-				foreach ($results as $uid) {
-					$currentCats = $this->getCategories($uid);
-					foreach ($currentCats as $v) {
-						if (\TYPO3\CMS\Core\Utility\GeneralUtility::inList($this->catExclusive, $v['catid'])) {
-							unset($results[$uid]);
-							break; // break after one deselected category was found
-						}
-					}
-				}
-
-				$matchlist = implode(',', $results);
-				if ($matchlist) {
-					$selectConf['where'] .= ' AND tt_news.uid IN (' . $matchlist . ')';
-				} else {
-					$selectConf['where'] .= ' AND tt_news.uid IN (0)';
-				}
-			}
+                $selectConf['where'] .= ' AND tt_news.uid NOT IN (SELECT uid from tt_news LEFT JOIN tt_news_cat_mm ON tt_news.uid = tt_news_cat_mm.uid_local WHERE tt_news_cat_mm.uid_foreign IN ('.$this->catExclusive.'))';
+            }
 		}
 
 		if ($this->debugTimes) {
@@ -3266,7 +3164,8 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 					$pL = intval($this->piVars['pL']);
 					//selecting news for a certain day only
 					if (intval($this->piVars['day'])) {
-						$pL = 86400; // = 24h, as pS always starts at the beginning of a day (00:00:00)
+                        // = 24h, as pS always starts at the beginning of a day (00:00:00)
+						$pL = 86400;
 					}
 					$selectConf['where'] .= ' AND tt_news.datetime<' . (intval($this->piVars['pS']) + $pL);
 				}
@@ -3284,7 +3183,8 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 			while (($wsRow = $this->db->sql_fetch_assoc($wsRes))) {
 				$orgUid = $wsRow['uid'];
 				$this->tsfe->sys_page->versionOL('tt_news', $wsRow);
-				if (! $wsRow['uid']) { // if versionOL returns nothing the record is not visible in the selected Workspace
+				if (! $wsRow['uid']) {
+                    // if versionOL returns nothing the record is not visible in the selected Workspace
 					$removeUids[] = $orgUid;
 				}
 			}
@@ -3315,10 +3215,6 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 			if ($this->config['groupBy']) {
 				$selectConf['groupBy'] = $this->config['groupBy'];
 			}
-			// 				else {
-			// 					$selectConf['groupBy'] = 'tt_news.uid';
-			// 				}
-
 
 			if ($this->config['orderBy']) {
 				if (strtoupper($this->config['orderBy']) == 'RANDOM') {
@@ -3339,19 +3235,12 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 		}
 
 		$selectConf['where'] .= $this->getLanguageWhere();
-		$selectConf['where'] .= ' AND tt_news.pid > 0 '; // only online versions
-		if ($this->theCode != 'LATEST') { // latest ignores search query
+        // only online versions
+		$selectConf['where'] .= ' AND tt_news.pid > 0 ';
+		if ($this->theCode != 'LATEST') {
+            // latest ignores search query
 			$selectConf['where'] .= $addwhere;
 		}
-
-		if ($this->conf['restrictListToThisTypes'] != '') {
-			$types = implode(',',\TYPO3\CMS\Core\Utility\GeneralUtility::trimExplode(',',$this->conf['restrictListToTheseTypes'],1));
-			$where = ' AND tt_news.type IN (' . $types . ')';
-		}
-
-
-
-
 
 		// listing related news
 		if ($this->theCode == 'RELATED' && $this->relNewsUid) {
@@ -3378,11 +3267,6 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 			}
 		}
 
-		//		debug($this->config['categoryMode'],'categoryMode');
-		//		debug($this->catExclusive,'$this->catExclusive');
-//				debug($selectConf,'select_conf '.$this->theCode);
-
-
 		if ($this->debugTimes) {
 			$this->hObj->getParsetime(__METHOD__);
 		}
@@ -3408,7 +3292,8 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 				$strictUids[] = $tmprow['l18n_parent'];
 			}
 			$strStrictUids = implode(',', $strictUids);
-			$where .= '(tt_news.uid IN (' . ($strStrictUids ? $strStrictUids : 0) . ') OR tt_news.sys_language_uid=-1)'; // sys_language_uid=-1 = [all languages]
+            // sys_language_uid=-1 = [all languages]
+			$where .= '(tt_news.uid IN (' . ($strStrictUids ? $strStrictUids : 0) . ') OR tt_news.sys_language_uid=-1)';
 		} else {
 			// sys_language_mode NOT 'strict': If a certain language is requested, select only news-records in the default language.
 			// The translated articles (if they exist) will be overlayed later in the displayList or displaySingle function.
@@ -3468,10 +3353,8 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 	function exec_getQuery($table, $conf) {
 		$error = 0;
 		// Construct WHERE clause:
-		if (! $this->conf['dontUsePidList']) {
-			if (! strcmp($conf['pidInList'], '')) {
-				$conf['pidInList'] = 'this';
-			}
+		if (! $this->conf['dontUsePidList'] && ! strcmp($conf['pidInList'], '')) {
+            $conf['pidInList'] = 'this';
 		}
 
 		$queryParts = $this->getWhere($table, $conf, TRUE);
@@ -3480,19 +3363,17 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 		$queryParts['SELECT'] = $conf['selectFields'] ? $conf['selectFields'] : '*';
 
 		// Setting LIMIT:
-		if ($conf['max'] || $conf['begin']) {
-			if (! $error) {
-				$conf['begin'] = \TYPO3\CMS\Core\Utility\MathUtility::forceIntegerInRange(ceil($this->cObj->calc($conf['begin'])), 0);
-				if ($conf['begin'] && ! $conf['max']) {
-					$conf['max'] = 100000;
-				}
+		if (($conf['max'] || $conf['begin']) && ! $error) {
+            $conf['begin'] = \TYPO3\CMS\Core\Utility\MathUtility::forceIntegerInRange(ceil($this->cObj->calc($conf['begin'])), 0);
+            if ($conf['begin'] && ! $conf['max']) {
+                $conf['max'] = 100000;
+            }
 
-				if ($conf['begin'] && $conf['max']) {
-					$queryParts['LIMIT'] = $conf['begin'] . ',' . $conf['max'];
-				} elseif (! $conf['begin'] && $conf['max']) {
-					$queryParts['LIMIT'] = $conf['max'];
-				}
-			}
+            if ($conf['begin'] && $conf['max']) {
+                $queryParts['LIMIT'] = $conf['begin'] . ',' . $conf['max'];
+            } elseif (! $conf['begin'] && $conf['max']) {
+                $queryParts['LIMIT'] = $conf['max'];
+            }
 		}
 
 		if (! $error) {
@@ -3538,7 +3419,8 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 		}
 
 		if (trim($conf['pidInList'])) {
-			$listArr = \TYPO3\CMS\Core\Utility\GeneralUtility::intExplode(',', $conf['pidInList']); // str_replace instead of ereg_replace 020800
+            // str_replace instead of ereg_replace 020800
+			$listArr = \TYPO3\CMS\Core\Utility\GeneralUtility::intExplode(',', $conf['pidInList']);
 			if (count($listArr)) {
 				$query .= ' AND ' . $table . '.pid IN (' . implode(',', $listArr) . ')';
 			}
@@ -3559,19 +3441,16 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 		// MAKE WHERE:
 		if ($query) {
 			$queryParts['WHERE'] = trim(substr($query, 4)); // Stripping of " AND"...
-		//			$query = 'WHERE ' . $queryParts['WHERE'];
 		}
 
 		// GROUP BY
 		if (trim($conf['groupBy'])) {
 			$queryParts['GROUPBY'] = trim($conf['groupBy']);
-			//			$query .= ' GROUP BY ' . $queryParts['GROUPBY'];
 		}
 
 		// ORDER BY
 		if (trim($conf['orderBy'])) {
 			$queryParts['ORDERBY'] = trim($conf['orderBy']);
-			//			$query .= ' ORDER BY ' . $queryParts['ORDERBY'];
 		}
 
 		// Return result:
@@ -3604,52 +3483,44 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 
 
 	function initCaching() {
-		$lifetime = 0;
+		if (!$this->confArr['useInternalCaching']) {
+            return;
+        }
 
-		if ($this->confArr['useInternalCaching']) {
+        $cachingEngine = $this->confArr['cachingEngine'];
+        if ($cachingEngine == 'cachingFramework' && (!is_object($GLOBALS['typo3CacheFactory']) || !isset($GLOBALS['TYPO3_CONF_VARS']['SYS']['caching']['cacheConfigurations']['tt_news_cache']['backend']))) {
+            // if there's no cacheFactory object fall back to internal caching (TYPO3 < 4.3)
+            $cachingEngine = 'internal';
+        }
 
-			$cachingEngine = $this->confArr['cachingEngine'];
-			if ($cachingEngine == 'cachingFramework') {
-				if (!is_object($GLOBALS['typo3CacheFactory']) || !isset($GLOBALS['TYPO3_CONF_VARS']['SYS']['caching']['cacheConfigurations']['tt_news_cache']['backend'])) {
-					// if there's no cacheFactory object fall back to internal caching (TYPO3 < 4.3)
-					$cachingEngine = 'internal';
-				}
-			}
-			if (!$cachingEngine) {
-				$cachingEngine = 'internal';
-			}
+        if (!$cachingEngine) {
+            $cachingEngine = 'internal';
+        }
 
+        $this->cache_amenuPeriods = true;
+        $this->cache_categoryCount = true;
+        $this->cache_categories = true;
 
+        if ($this->confArr['writeCachingInfoToDevlog']) {
+            $tmp = \TYPO3\CMS\Core\Utility\GeneralUtility::trimExplode('|', $this->confArr['writeCachingInfoToDevlog'], 0);
+            if ($tmp[1]) {
+                $this->writeCachingInfoToDevlog = $tmp[1];
+            }
+        }
 
-			$this->cache_amenuPeriods = true;
-			$this->cache_categoryCount = true;
-			$this->cache_categories = true;
+        if($this->confArr['cacheClearMode'] == 'lifetime'){
+            $lifetime = $this->confArr['cacheLifetime'];
+        }elseif (method_exists($this->tsfe,'get_cache_timeout')) {
+            // TYPO3 >= 4.2
+            // seconds until a cached page is too old
+            $lifetime = $this->tsfe->get_cache_timeout();
+        } else {
+            $lifetime = 86400;
+        }
 
-			if ($this->confArr['writeCachingInfoToDevlog']) {
-				$tmp = \TYPO3\CMS\Core\Utility\GeneralUtility::trimExplode('|', $this->confArr['writeCachingInfoToDevlog'], 0);
-				if ($tmp[1]) {
-					$this->writeCachingInfoToDevlog = $tmp[1];
-				}
-			}
-
-			switch ($this->confArr['cacheClearMode']) {
-				case 'lifetime' :
-					$lifetime = $this->confArr['cacheLifetime'];
-					break;
-
-				default : // normal
-					if (method_exists($this->tsfe,'get_cache_timeout')) { // TYPO3 >= 4.2
-						$lifetime = $this->tsfe->get_cache_timeout(); // seconds until a cached page is too old
-					} else {
-						$lifetime = 86400;
-					}
-					break;
-					// the case 'never' uses the default: $lifetime = 0;
-			}
-			$this->cache = new tx_ttnews_cache($cachingEngine);
-			$this->cache->lifetime = $lifetime;
-			$this->cache->ACCESS_TIME = $this->SIM_ACCESS_TIME;
-		}
+        $this->cache = new tx_ttnews_cache($cachingEngine);
+        $this->cache->lifetime = $lifetime;
+        $this->cache->ACCESS_TIME = $this->SIM_ACCESS_TIME;
 	}
 
 
@@ -3716,14 +3587,14 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 
 			if ($this->config['useSubCategories'] && $this->config['catSelection']) {
 				// get subcategories for selection from getVars
-				$subcats = tx_ttnews_div::getSubCategories($this->config['catSelection'], $addWhere);
+				$subcats = \WMDB\TtNews\Lib\tx_ttnews_div::getSubCategories($this->config['catSelection'], $addWhere);
 				$this->config['catSelection'] = implode(',', array_unique(explode(',', $this->config['catSelection'] . ($subcats ? ',' . $subcats : ''))));
 			}
 		}
 		$catExclusive = $this->pi_getFFvalue($this->cObj->data['pi_flexform'], 'categorySelection', 'sDEF');
 		$catExclusive = $catExclusive ? $catExclusive : trim($this->cObj->stdWrap($this->conf['categorySelection'], $this->conf['categorySelection.']));
-		$this->catExclusive = $this->config['categoryMode'] ? $catExclusive : 0; // ignore cat selection if categoryMode isn't set
-
+        // ignore cat selection if categoryMode isn't set
+        $this->catExclusive = $this->config['categoryMode'] ? $catExclusive : 0;
 
 		$this->catExclusive = $this->hObj->checkRecords($this->catExclusive);
 		// store the actually selected categories because we need them for the comparison in categoryMode 2 and -2
@@ -3731,10 +3602,11 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 
 		// get subcategories
 		if ($this->config['useSubCategories'] && $this->catExclusive) {
-			$subcats = tx_ttnews_div::getSubCategories($this->catExclusive, $addWhere);
+			$subcats = \WMDB\TtNews\Lib\tx_ttnews_div::getSubCategories($this->catExclusive, $addWhere);
 			$this->catExclusive = implode(',', array_unique(explode(',', $this->catExclusive . ($subcats ? ',' . $subcats : ''))));
 
 		}
+
 		// get more category fields from FF or TS
 		$fields = explode(',', 'catImageMode,catTextMode,catImageMaxWidth,catImageMaxHeight,maxCatImages,catTextLength,maxCatTexts');
 		foreach ($fields as $key) {
@@ -3920,7 +3792,8 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 			}
 		}
 
-		if (! ($range['minval'] && $range['maxval'])) { // find minval and/or maxval automatically
+		if (! ($range['minval'] && $range['maxval'])) {
+            // find minval and/or maxval automatically
 			$selectConf['selectFields'] = '';
 			if (! $range['minval']) {
 				$selectConf['selectFields'] .= 'MIN(tt_news.datetime) AS minval';
@@ -3966,17 +3839,17 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 		return false;
 	}
 
+    /**
+     * @param $template
+     * @return mixed
+     */
+    function getMarkers($template)
+    {
+        $matches = array();
+        preg_match_all('/###(.+)###/Us', $template, $matches);
 
-	/**
-	 * @param $template
-	 * @return mixed
-	 */
-	function getMarkers($template) {
-		$matches = array();
-		preg_match_all('/###(.+)###/Us', $template, $matches);
-		return $matches[0];
-	}
-
+        return array_unique($matches[0]);
+    }
 
 	/**
 	 * converts the datetime of a record into variables you can use in realurl
@@ -4120,7 +3993,7 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 				$_procObj->processSingleViewLink($linkWrap, $url, $params, $this);
 			}
 		}
-		$this->local_cObj->LOAD_REGISTER(array('newsMoreLink' => $linkWrap[0] . $this->pi_getLL('more') . $linkWrap[1], 'newsMoreLink_url' => $url), '');
+		$this->local_cObj->cObjGetSingle('LOAD_REGISTER', array('newsMoreLink' => $linkWrap[0] . $this->pi_getLL('more') . $linkWrap[1], 'newsMoreLink_url' => $url));
 
 		if ($this->conf['useHRDates'] && $this->conf['useHRDatesSingle']) {
 			$this->piVars['year'] = $tmpY;
@@ -4168,6 +4041,39 @@ class tx_ttnews extends \TYPO3\CMS\Frontend\Plugin\AbstractPlugin {
 		}
 		return $mimeType;
 	}
+
+    /**
+     * @param $val
+     * @param $catSelLinkParams
+     * @param $lConf
+     * @param $output
+     * @return array
+     */
+    protected function handleCatTextMode($val, $catSelLinkParams, $lConf, $output)
+    {
+        if ($this->config['catTextMode'] == 2) {
+            // link to category shortcut
+            $target = ($val['shortcut'] ? $val['shortcut_target'] : '');
+            $pageID = ($val['shortcut'] ? $val['shortcut'] : $catSelLinkParams);
+            $linkedTitle = $this->pi_linkToPage($val['title'], $pageID, $target);
+            $output[] = $this->local_cObj->stdWrap($linkedTitle, $lConf['title_stdWrap.']);
+            return $output;
+        } elseif ($this->config['catTextMode'] == 3) {
+            if ($this->conf['useHRDates']) {
+                $output[] = $this->local_cObj->stdWrap($this->pi_linkTP_keepPIvars($val['title'], array('cat' => $val['uid'],
+                    'year' => ($this->piVars['year'] ? $this->piVars['year'] : null),
+                    'month' => ($this->piVars['month'] ? $this->piVars['month'] : null), 'backPid' => null,
+                    'tt_news' => null, $this->pointerName => null), $this->allowCaching, 0, $catSelLinkParams), $lConf['title_stdWrap.']);
+                return $output;
+            } else {
+                $output[] = $this->local_cObj->stdWrap($this->pi_linkTP_keepPIvars($val['title'], array('cat' => $val['uid'],
+                    'backPid' => null, 'tt_news' => null, $this->pointerName => null), $this->allowCaching, 0, $catSelLinkParams), $lConf['title_stdWrap.']);
+                return $output;
+            }
+        }
+
+        return $output;
+    }
 }
 
 

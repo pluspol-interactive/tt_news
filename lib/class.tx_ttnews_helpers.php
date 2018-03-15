@@ -43,7 +43,7 @@ class tx_ttnews_helpers {
 	var $pObj;
 
 
-	function tx_ttnews_helpers(&$pObj) {
+	function __construct(&$pObj) {
 		$this->pObj = &$pObj;
 	}
 
@@ -178,7 +178,7 @@ class tx_ttnews_helpers {
 			$this->pObj->internal['results_at_a_time'] = 1;
 			$this->pObj->internal['maxPages'] = $this->pObj->conf['pageBrowser.']['maxPages'];
 			if (! $this->pObj->conf['pageBrowser.']['showPBrowserText']) {
-				$this->pObj->LOCAL_LANG[$this->pObj->LLkey]['pi_list_browseresults_page'] = '';
+				$this->pObj->LOCAL_LANG[$this->pObj->LLkey]['pi_list_browseresults_page'] = ' ';
 			}
 			$pbConf = $this->pObj->conf['singleViewPageBrowser.'];
 			$markerArray = array();
@@ -406,7 +406,7 @@ class tx_ttnews_helpers {
 		if (count($this->pObj->errors) >= 2) {
 			$msg = '--> Did you include the static TypoScript template (\'News settings\') for tt_news?';
 		}
-		return '<div style="border:2px solid red; padding:10px; margin:10px;"><img src="typo3/gfx/icon_warning2.gif" />
+		return '<div style="border:2px solid red; padding:10px; margin:10px;"><img src="typo3conf/ext/tt_news/Resources/Public/Icons/warning.png" />
 				<strong>plugin.tt_news ERROR:</strong><br />' . implode('<br /> ', $this->pObj->errors) . '<br />' . $msg . '</div>';
 	}
 
